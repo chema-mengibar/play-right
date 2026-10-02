@@ -1,0 +1,80 @@
+.editor-view {
+  min-height: 100vh; background: #1a1a1a; color: #fff; font-family: Inter, Arial, sans-serif;
+  &__workspace { box-sizing: border-box; display: flex; align-items: flex-start; gap: 10px; width: min(1043px, 100%); min-height: 100vh; margin: 0 auto; padding: 80px 24px; }
+}
+.editor-form {
+  position: relative; box-sizing: border-box; display: flex; flex: 0 0 718px; flex-direction: column; align-items: stretch; gap: 18px; padding: 22px 18px;
+  &__row { display: flex; align-items: center; gap: 5px; }
+  &__row--split { justify-content: space-between; }
+  &__row-controls { justify-content: space-between; }
+  &__control-actions { display: flex; align-items: center; gap: 5px; }
+  &__file-actions { display: flex; align-items: center; gap: 5px; }
+  &__filename { min-height: 15px; color: #cfcfcf; font-size: 12px; }
+  &__message { position: fixed; z-index: 20; top: 16px; left: 50%; width: min(682px, calc(100vw - 32px)); transform: translateX(-50%); margin: 0; padding: 9px 12px; background: #1d8f67; color: #fff; font-size: 12px; font-weight: 700; }
+  &__message--error { background: #d91f32; }
+}
+input, select, textarea, button { box-sizing: border-box; font: 400 12px/1.25 Inter, Arial, sans-serif; }
+input, select, textarea { border: 0; border-radius: 0; outline: 0; background: #fff; color: #000; }
+input:focus, select:focus, textarea:focus { box-shadow: inset 0 0 0 2px #36f7fe; }
+select { width: 162px; height: 31px; padding: 8px 9px; }
+.button {
+  height: 25px; border: 0; border-radius: 6px; color: #000; cursor: pointer; padding: 5px 11px;
+  &:disabled { cursor: default; opacity: .5; }
+  &--load, &--select { width: 60px; background: #51bfc7; }
+  &--create { width: 94px; background: #36f7fe; }
+  &--save { width: 92px; background: #feb836; }
+  &--delete { width: 92px; background: #d91f32; color: #fff; }
+  &--add { width: 92px; background: #51bfc7; }
+  &--small { width: 70px; }
+}
+.field {
+  display: flex; flex-direction: column; gap: 5px; font-size: 12px;
+  > span { height: 15px; }
+  input { width: 100%; height: 31px; padding: 8px 9px; }
+  textarea { width: 100%; height: 101px; padding: 8px 9px; resize: none; }
+}
+.player-count { font-size: 12px; input { width: 56px; height: 31px; padding: 8px 9px; text-align: center; } }
+.teams { display: flex; align-items: flex-start; gap: 19px; }
+.team-group {
+  display: flex; flex-direction: column; gap: 10px; padding: 5px;
+
+  &--home { border-left: 2px solid  #172f8a;  }
+  &--guest { border-left: 2px solid  #d91f32;  }
+
+}
+.player-row { justify-content: center; gap: 10px; height: 31px; input { width: 100px; height: 31px; padding: 8px 9px; } }
+.select-field { font-size: 12px; span { width: 140px; } }
+.slots-editor { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+.slot-row {
+  gap: 10px;
+  input { width: 100px; height: 31px; padding: 8px 9px; }
+}
+.rink-container { display: flex; flex: 0 0 250px; height: 512px; align-items: center; justify-content: center; overflow: hidden; }
+.rink {
+  display: block; width: 250px; height: 500px; overflow: hidden; touch-action: none; user-select: none;
+  &__player {
+    cursor: grab;
+    circle, rect { stroke: #fff; stroke-width: 1.5; }
+    text { fill: #fff; font: 700 9px Inter, sans-serif; text-anchor: middle; pointer-events: none; }
+    &--home { circle, rect { fill: #172f8a; } }
+    &--guest { circle, rect { fill: #d91f32; } }
+    &--selected { circle, rect { stroke: #feb836; stroke-width: 3; } }
+    &.with-ball { circle, rect { stroke: #ff9f1c; stroke-width: 3; } }
+  }
+  &__slot {
+    cursor: grab;
+    rect { fill: #76d7ff; fill-opacity: .45; stroke: #177aa0; stroke-width: 1; }
+    &--selected rect { stroke: #feb836; stroke-width: 3; }
+  }
+}
+@media (max-width: 900px) {
+  .editor-view__workspace { width: 100%; flex-direction: column; padding: 24px; }
+  .editor-form { width: min(718px, 100%); flex-basis: auto; }
+  .rink-container { flex-basis: auto; }
+}
+@media (max-width: 560px) {
+  .editor-view__workspace { padding-inline: 8px; }
+  .editor-form { padding-inline: 8px; }
+  .teams { gap: 6px; }
+  .player-row { gap: 3px; input { width: 78px; } }
+}

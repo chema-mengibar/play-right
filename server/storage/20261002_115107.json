@@ -1,0 +1,75 @@
+{
+    "name": "test",
+    "short_description": "",
+    "num_players": 5,
+    "players": [
+        {
+            "id": "home_goalie",
+            "x": 0,
+            "y": -0.88
+        },
+        {
+            "id": "home_1",
+            "x": 0.034,
+            "y": 0.17
+        },
+        {
+            "id": "home_2",
+            "x": -0.466,
+            "y": 0.311
+        },
+        {
+            "id": "home_3",
+            "x": -0.62,
+            "y": -0.05
+        },
+        {
+            "id": "home_4",
+            "x": 0.638,
+            "y": -0.145
+        },
+        {
+            "id": "home_5",
+            "x": -0.095,
+            "y": -0.328
+        },
+        {
+            "id": "guest_goalie",
+            "x": 0,
+            "y": 0.88
+        },
+        {
+            "id": "guest_1",
+            "x": 0.552,
+            "y": 0.469
+        },
+        {
+            "id": "guest_2",
+            "x": -0.44,
+            "y": 0.046
+        },
+        {
+            "id": "guest_3",
+            "x": -0.19,
+            "y": 0.469
+        },
+        {
+            "id": "guest_4",
+            "x": 0.431,
+            "y": 0.124
+        },
+        {
+            "id": "guest_5",
+            "x": -0.612,
+            "y": 0.581
+        }
+    ],
+    "ball": {
+        "x": 0,
+        "y": 0
+    },
+    "camera_player_id": "home_3",
+    "possession_player_id": "home_3",
+    "best_option": "home_2",
+    "slots": []
+}

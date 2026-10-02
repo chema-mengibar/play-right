@@ -1,0 +1,71 @@
+{
+    "name": "defense 1",
+    "short_description": "",
+    "num_players": 4,
+    "players": [
+        {
+            "id": "home_goalie",
+            "x": 0,
+            "y": -0.88
+        },
+        {
+            "id": "home_1",
+            "x": 0.44,
+            "y": 0.718
+        },
+        {
+            "id": "home_2",
+            "x": 0.974,
+            "y": -0.971
+        },
+        {
+            "id": "home_3",
+            "x": -0.341,
+            "y": -0.402
+        },
+        {
+            "id": "home_4",
+            "x": -0.03,
+            "y": -0.714
+        },
+        {
+            "id": "guest_goalie",
+            "x": 0,
+            "y": 0.88
+        },
+        {
+            "id": "guest_1",
+            "x": 1,
+            "y": -0.237
+        },
+        {
+            "id": "guest_2",
+            "x": -0.888,
+            "y": -1
+        },
+        {
+            "id": "guest_3",
+            "x": 0.194,
+            "y": -0.78
+        },
+        {
+            "id": "guest_4",
+            "x": -0.983,
+            "y": -0.087
+        }
+    ],
+    "ball": {
+        "x": 0,
+        "y": 0
+    },
+    "camera_player_id": "home_1",
+    "possession_player_id": "guest_goalie",
+    "best_option": "guest_2",
+    "slots": [
+        {
+            "id": "slot_1",
+            "x": 0.797,
+            "y": -0.921
+        }
+    ]
+}

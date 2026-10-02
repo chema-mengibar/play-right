@@ -1,0 +1,89 @@
+.simulation-view { position: relative; width: 100%; height: 100vh; overflow: hidden; background: #cfd2d4; font-family: Inter, Arial, sans-serif; }
+.simulation-view::before { content: ""; position: absolute; z-index: 3; top: 0; left: 0; width: 100%; height: 4px; background: #000; pointer-events: none; }
+.simulation-view--guest::before { background: #d91f32; }
+.simulation-view canvas { display: block; width: 100%; height: 100%; }
+.simulation-hud {
+  position: absolute; z-index: 2; top: 16px; left: 16px; right: 16px; display: flex; justify-content: space-between; gap: 12px; pointer-events: none;
+  &__meta { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 6px 10px; background: rgba(20, 20, 20, .7); color: #fff; font-size: 12px; pointer-events: auto; cursor: pointer; }
+  &__meta:hover { background: rgba(20, 20, 20, .9); }
+  &__meta span { color: #d8d8d8; }
+  &__controls { display: flex; align-items: center; gap: 6px; pointer-events: auto; }
+  &__analytics { position: relative; z-index: 6; }
+  &__analytics-menu { position: absolute; z-index: 7; top: 40px; right: 0; display: grid; gap: 4px; min-width: 170px; padding: 6px; background: rgba(255, 255, 255, .9); }
+  &__analytics-menu button { width: 100%; min-width: 0; justify-content: flex-start; text-align: left; white-space: nowrap; }
+  &__analytics-menu button.is-active { background: #feb836; color: #000; }
+  &__sliders { position: absolute; top: 40px; right: 0; display: grid; gap: 6px; width: 320px; padding: 8px 10px; background: rgba(20, 20, 20, .72); pointer-events: auto; touch-action: none; }
+  &__sliders label { display: grid; grid-template-columns: 108px 54px 1fr; align-items: center; gap: 8px; color: #fff; font: 700 11px/1 Inter, Arial, sans-serif; text-transform: uppercase; }
+  &__sliders strong { color: #feb836; font: 800 11px/1 Inter, Arial, sans-serif; text-align: right; text-transform: none; white-space: nowrap; }
+  &__sliders input { width: 100%; touch-action: none; }
+  button { height: 32px; border: 0; border-radius: 4px; padding: 0 12px; background: rgba(20, 20, 20, .76); color: #fff; cursor: pointer; font: 700 12px/1 Inter, Arial, sans-serif; text-transform: uppercase; pointer-events: auto; }
+  button:hover { background: rgba(20, 20, 20, .92); }
+  button.is-active { background: #feb836; color: #000; }
+}
+.simulation-actions {
+  position: absolute; z-index: 2; top: 16px; left: 50%; display: flex; align-items: center; gap: 8px; transform: translateX(-50%);
+  button { height: 36px; min-width: 92px; border: 0; border-radius: 4px; padding: 0 14px; background: rgba(20, 20, 20, .82); color: #fff; cursor: pointer; font: 800 12px/1 Inter, Arial, sans-serif; text-transform: uppercase; }
+  button:hover { background: rgba(20, 20, 20, .96); }
+}
+.simulation-map {
+  position: absolute; z-index: 2; right: 16px; bottom: 16px; display: flex; width: 190px; flex-direction: column; gap: 10px; pointer-events: none;
+  &__overlay { display: block; width: 100%; height: 98px; background: rgba(255, 255, 255, .96); overflow: hidden; pointer-events: none; }
+  &__rink { display: block; width: 100%; height: 330px; border: 1px solid rgba(0, 0, 0, .25); background: rgba(226, 226, 222, .78); overflow: visible; }
+  &__rink-line { stroke: rgba(217, 31, 50, .78); stroke-width: 1.1; }
+  &__rink-blue-line { stroke: rgba(31, 98, 208, .82); stroke-width: 1.6; }
+  &__rink-circle { fill: none; stroke: rgba(217, 31, 50, .72); stroke-width: 1.1; }
+  &__rink-dot { fill: rgba(217, 31, 50, .9); stroke: none; }
+  &__rink-crease { fill: rgba(111, 182, 255, .22); stroke: rgba(217, 31, 50, .72); stroke-width: .9; }
+  &__analytics-area { stroke-width: 1.4; }
+  &__analytics-area--home { fill: rgba(23, 47, 138, .22); stroke: rgba(23, 47, 138, .8); }
+  &__analytics-area--guest { fill: rgba(217, 31, 50, .22); stroke: rgba(217, 31, 50, .8); }
+  &__analytics-player-area--home { fill: rgba(23, 47, 138, .22); stroke: rgba(23, 47, 138, .55); stroke-width: 1; }
+  &__analytics-player-area--guest { fill: rgba(217, 31, 50, .22); stroke: rgba(217, 31, 50, .55); stroke-width: 1; }
+  &__heat-cell { stroke: rgba(255, 255, 255, .2); stroke-width: .15; }
+  &__passing-lane { fill: none; stroke-width: 2.2; stroke-linecap: round; }
+  &__passing-lane--clear { stroke: #1d8f67; }
+  &__passing-lane--partial { stroke: #feb836; stroke-dasharray: 4 3; }
+  &__passing-lane--blocked { stroke: #d91f32; stroke-dasharray: 2 3; }
+  &__goalie-coverage { fill: none; stroke-linecap: round; }
+  &__goalie-coverage-target { stroke-width: 2.4; }
+  &__goalie-coverage-post { stroke: rgba(31, 98, 208, .62); stroke-width: 1.2; stroke-dasharray: 3 2; }
+  &__goalie-coverage-facing { stroke: rgba(20, 20, 20, .78); stroke-width: 1.4; stroke-dasharray: 2 2; }
+  &__goalie-coverage--aligned &__goalie-coverage-target { stroke: #1d8f67; }
+  &__goalie-coverage--close &__goalie-coverage-target { stroke: #feb836; }
+  &__goalie-coverage--off &__goalie-coverage-target { stroke: #d91f32; }
+  &__crease { fill: rgba(20, 20, 20, .16); stroke: none; }
+  &__goal-line { stroke: #ff1717; stroke-width: 2.6; }
+  &__goal-cage { fill: none; stroke: #ff1717; stroke-width: 2.6; }
+  &__goalie-box { fill: #050505; stroke: none; }
+  &__camera-dot { fill: #fff; stroke: #141414; stroke-width: .7; }
+  &__shot-line { stroke: #ffae16; stroke-width: .7; stroke-linecap: round; }
+  &__player { stroke: #fff; stroke-width: 1.4; }
+  &__player--home { fill: #172f8a; }
+  &__player--guest { fill: #d91f32; }
+  &__player.with-ball { stroke: #ff9f1c; stroke-width: 2.4; }
+  &__player-camera { fill: #141414; }
+  &__solution-player { fill: none; stroke: #31e65d; stroke-width: 2.4; }
+  &__slot { fill: rgba(118, 215, 255, .55); stroke: #177aa0; stroke-width: 1.2; }
+}
+.simulation-modal {
+  position: absolute; z-index: 4; top: 16px; left: 16px; pointer-events: none;
+  &__panel { display: flex; min-width: 220px; flex-direction: column; align-items: center; gap: 12px; padding: 22px; background: rgba(20, 20, 20, .9); color: #fff; }
+  &__panel--success { box-shadow: inset 0 0 0 3px #1d8f67; }
+  &__panel--error { box-shadow: inset 0 0 0 3px #d91f32; }
+  strong { font: 800 28px/1 Inter, Arial, sans-serif; text-transform: uppercase; }
+  em { color: #feb836; font: 800 13px/1 Inter, Arial, sans-serif; font-style: normal; text-transform: uppercase; }
+  span { font: 700 13px/1 Inter, Arial, sans-serif; color: #d8d8d8; }
+  button { height: 34px; min-width: 92px; border: 0; border-radius: 4px; background: #feb836; color: #000; cursor: pointer; font: 800 12px/1 Inter, Arial, sans-serif; text-transform: uppercase; pointer-events: auto; }
+}
+.simulation-game-picker {
+  position: absolute; z-index: 5; inset: 0; display: flex; align-items: flex-start; justify-content: flex-start; padding: 58px 16px 16px; background: rgba(0, 0, 0, .18);
+  &__panel { width: min(380px, calc(100vw - 32px)); max-height: min(620px, calc(100vh - 74px)); display: flex; flex-direction: column; background: rgba(20, 20, 20, .94); color: #fff; box-shadow: 0 14px 34px rgba(0, 0, 0, .3); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border-bottom: 1px solid rgba(255, 255, 255, .14); }
+  header strong { font: 800 14px/1 Inter, Arial, sans-serif; text-transform: uppercase; }
+  header button { height: 28px; border: 0; border-radius: 4px; padding: 0 10px; background: rgba(255, 255, 255, .12); color: #fff; cursor: pointer; font: 800 11px/1 Inter, Arial, sans-serif; text-transform: uppercase; }
+  &__body { overflow-y: auto; padding: 8px; display: grid; gap: 6px; }
+  &__body button { display: grid; gap: 4px; width: 100%; border: 0; border-radius: 4px; padding: 10px; background: rgba(255, 255, 255, .08); color: #fff; cursor: pointer; text-align: left; }
+  &__body button:hover, &__body button.is-active { background: #feb836; color: #000; }
+  &__body strong { font: 800 13px/1.1 Inter, Arial, sans-serif; }
+  &__body span { color: inherit; opacity: .72; font: 700 11px/1.1 Inter, Arial, sans-serif; }
+}
