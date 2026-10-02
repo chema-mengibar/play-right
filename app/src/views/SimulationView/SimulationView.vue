@@ -1,16 +1,67 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { RINKS, toRinkCoordinates } from '../../config/rink-dimensions.js'
-import { drawGoalieCoverageCone, drawOpenSpaceHeatMap, drawPassingLanes, drawPlayerAreas, drawTeamsAreas, removeTeamsAreas } from '../../services/AnalyticsService.js'
+import { RINKS } from '../../config/rink-dimensions.js'
+import DecisionActions from './partials/DecisionActions.vue'
+import GamePicker from './partials/GamePicker.vue'
+import GoalieSliders from './partials/GoalieSliders.vue'
+import GoalOverlay from './partials/GoalOverlay.vue'
+import HudControls from './partials/HudControls.vue'
+import ResultModal from './partials/ResultModal.vue'
+import RinkMap from './partials/RinkMap.vue'
+import { renderAnalyticsOverlays as renderThreeAnalyticsOverlays } from './utils/analytics-overlays.js'
+import { assetUrl, rinkUrl } from './utils/assets.js'
+import { closeupGoalCreasePath, goalieWorldYaw as getGoalieWorldYaw, rinkWorldToCreaseCloseupPoint } from './utils/goal-overlay-geometry.js'
+import { applySceneTheme as applyThreeSceneTheme, createRinkMaterials } from './utils/scene-theme.js'
+import {
+  mapPointToRinkSvgPoint,
+  rinkWorldToMapPoint,
+} from './utils/map-rendering.js'
+import {
+  clampRinkPosition,
+  creaseDepth,
+  creaseWidth,
+  endZoneFaceoffCenters,
+  faceoffCircleRadius,
+  faceoffDotRadius,
+  formatDegrees,
+  formatMeters,
+  goalieRinkPosition as getGoalieRinkPosition,
+  goalWidth,
+  guestBlueLine,
+  guestGoalLine,
+  homeBlueLine,
+  homeGoalLine,
+  playerAreaRadius,
+  playerSpriteCenterY,
+  playerSpriteSize,
+  rinkPlacementPadding,
+  spriteSheet,
+  spriteTileForPlayer,
+  toPaddedRinkCoordinates as getPaddedRinkCoordinates,
+} from './utils/rink-geometry.js'
+import {
+  clearGroup,
+  createDistanceLabel as createDistanceLabelSprite,
+  createFloorCircle,
+  createFloorRect,
+  createFloorRing,
+  createGoalCrease,
+  cropTexture as cropSpriteTexture,
+  disposeObject,
+} from './utils/three-scene.js'
+import { cameraMoveSpeed, cameraProfiles, cameraYawSpeed, floorLineY } from '../../services/simulation/config.js'
 
-const gamesEndpoint = '/api/games'
+const services = inject('services')
+const analytics = services.analytics
+const simulation = services.simulation
+const sceneRefs = simulation.scene
 const host = ref(null)
-let renderer
 let scene
 let camera
+let renderer
 let orbitControls
 let frame
 let resizeObserver
@@ -29,40 +80,20 @@ let lastFrameTime = 0
 let hudInteractionActive = false
 let hudHoverActive = false
 let savedOrbitCameraState = null
-const cameraProfiles = {
-  firstPerson: { fov: 65, near: 0.03, far: 160 },
-  orbit: { fov: 45, near: 0.1, far: 220 },
-}
-const rinkSurfaceMaterial = new THREE.MeshStandardMaterial({
-  color: 0xe9f4f8,
-  roughness: 0.48,
-  metalness: 0.02,
-  side: THREE.DoubleSide,
-})
-const rinkWallMaterial = new THREE.MeshStandardMaterial({
-  color: 0xd7d3c8,
-  roughness: 0.72,
-  side: THREE.DoubleSide,
-})
+const { surface: rinkSurfaceMaterial, wall: rinkWallMaterial } = createRinkMaterials()
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const pressedKeys = new Set()
-const cameraYawSpeed = Math.PI * 1.1
-const cameraMoveSpeed = 5
-const floorLineY = 0.08
 const disposables = []
 const playerPositions = new Map()
 const currentGame = ref(null)
 const currentFile = ref('')
 const gameList = ref([])
 const showGamePicker = ref(false)
-const showTopView = ref(true)
-const showGoalOverlay = ref(true)
 const showGrid = ref(false)
 const freeCamera = ref(false)
 const showRuler = ref(false)
 const showShotLines = ref(false)
-const showAnalyticsMenu = ref(false)
 const analyticsTeamAreas = ref([])
 const analyticsPlayerAreas = ref([])
 const analyticsHeatMap = ref([])
@@ -83,128 +114,13 @@ const cameraTeam = computed(() => currentGame.value?.camera_player_id?.startsWit
 const goalieSideMeters = computed(() => goalieLateral.value * creaseWidth * 0.75)
 const goalieDepthMeters = computed(() => rinkPlacementPadding + goalieDepth.value * creaseDepth)
 const goalieRotationDegrees = computed(() => goalieRotation.value)
-const formatMeters = (value) => `${value.toFixed(2)} m`
-const formatDegrees = (value) => `${Math.round(value)} deg`
-const sceneTheme = {
-  real: {
-    background: 0x151a20,
-    fog: 0x151a20,
-    surface: 0xe9f4f8,
-    wall: 0xd7d3c8,
-    roughness: 0.48,
-  },
-  cartoon: {
-    background: 0xbfe9ff,
-    fog: 0xbfe9ff,
-    surface: 0xf6fbff,
-    wall: 0x34b3ff,
-    roughness: 0.82,
-  },
-}
-
-const defaultGame = () => ({
-  players: [
-    { id: 'home_goalie', x: 0, y: -0.88 },
-    { id: 'home_1', x: 0, y: -0.06 },
-    { id: 'home_2', x: 0.62, y: -0.05 },
-    { id: 'home_3', x: -0.62, y: -0.05 },
-    { id: 'home_4', x: 0, y: -0.36 },
-    { id: 'guest_goalie', x: 0, y: 0.88 },
-    { id: 'guest_1', x: 0, y: 0.06 },
-    { id: 'guest_2', x: -0.62, y: 0.05 },
-    { id: 'guest_3', x: 0.62, y: 0.05 },
-    { id: 'guest_4', x: 0, y: 0.36 },
-  ],
-})
-
 const disposeLater = (...items) => {
   disposables.push(...items.filter(Boolean))
 }
 
-const assetUrl = (style, team) => `${import.meta.env.BASE_URL}assets/${style}_team_${team}.png`
-const rinkUrl = `${import.meta.env.BASE_URL}assets/rink.glb`
-const spriteSheet = { columns: 4, rows: 3 }
-const playerSpriteSize = 1.6
-const rinkPlacementPadding = playerSpriteSize / 2
-const playerSpriteCenterY = playerSpriteSize / 2
-const rinkMapSvg = { width: 190, height: 330 }
-const feetToWorld = RINKS.standard.width / 200
-const goalLineFromEnd = 11 * feetToWorld
-const blueLineFromEnd = 75 * feetToWorld
-const endZoneFaceoffFromEnd = 31 * feetToWorld
-const endZoneFaceoffOffset = 22 * feetToWorld
-const faceoffCircleRadius = 15 * feetToWorld
-const faceoffDotRadius = 1 * feetToWorld
-const playerAreaRadius = 2
-const creaseWidth = 8 * feetToWorld
-const creaseDepth = 6 * feetToWorld
-const spriteTileForPlayer = (id) => {
-  if (id.endsWith('_goalie')) return { column: 0, row: 2 }
-  const number = Math.max(1, Number(id.split('_')[1]) || 1)
-  const index = (number - 1) % (spriteSheet.columns * spriteSheet.rows)
-  return { column: index % spriteSheet.columns, row: Math.floor(index / spriteSheet.columns) }
-}
-
-function cropTexture(texture, { column, row }) {
-  const cropped = texture.clone()
-  cropped.needsUpdate = true
-  cropped.repeat.set(1 / spriteSheet.columns, 1 / spriteSheet.rows)
-  cropped.offset.set(column / spriteSheet.columns, 1 - (row + 1) / spriteSheet.rows)
-  return cropped
-}
-
-const fromSvg = (x, y) => ({
-  x: (y / 500 - 0.5) * RINKS.standard.width,
-  z: -(x / 250 - 0.5) * RINKS.standard.height,
-})
-
-const homeGoalLine = { x: -RINKS.standard.width / 2 + goalLineFromEnd, z: 0 }
-const guestGoalLine = { x: RINKS.standard.width / 2 - goalLineFromEnd, z: 0 }
-const homeBlueLine = { x: -RINKS.standard.width / 2 + blueLineFromEnd, z: 0 }
-const guestBlueLine = { x: RINKS.standard.width / 2 - blueLineFromEnd, z: 0 }
-const endZoneFaceoffCenters = [
-  { x: -RINKS.standard.width / 2 + endZoneFaceoffFromEnd, z: -endZoneFaceoffOffset },
-  { x: -RINKS.standard.width / 2 + endZoneFaceoffFromEnd, z: endZoneFaceoffOffset },
-  { x: RINKS.standard.width / 2 - endZoneFaceoffFromEnd, z: -endZoneFaceoffOffset },
-  { x: RINKS.standard.width / 2 - endZoneFaceoffFromEnd, z: endZoneFaceoffOffset },
-]
-
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
-
-function toPaddedRinkCoordinates(point) {
-  if (point.id === 'home_goalie') return goalieRinkPosition('home')
-  if (point.id === 'guest_goalie') return goalieRinkPosition('guest')
-
-  const position = toRinkCoordinates(point, RINKS.standard)
-  return {
-    x: clamp(position.x, -RINKS.standard.width / 2 + rinkPlacementPadding, RINKS.standard.width / 2 - rinkPlacementPadding),
-    y: clamp(position.y, -RINKS.standard.height / 2 + rinkPlacementPadding, RINKS.standard.height / 2 - rinkPlacementPadding),
-  }
-}
-
-function goalieRinkPosition(team) {
-  const direction = team === 'home' ? 1 : -1
-  const goalLine = team === 'home' ? homeGoalLine : guestGoalLine
-  const maxLateral = creaseWidth * 0.75
-  return {
-    x: goalLine.x + direction * (rinkPlacementPadding + goalieDepth.value * creaseDepth),
-    y: goalieLateral.value * maxLateral,
-  }
-}
-
-function rinkWorldToMapPoint(position) {
-  return {
-    x: 50 + (position.z / (RINKS.standard.height / 2)) * 45,
-    y: 50 - (position.x / (RINKS.standard.width / 2)) * 45,
-  }
-}
-
-function rinkWorldToFullMapPoint(position) {
-  return {
-    x: 50 + (position.z / (RINKS.standard.height / 2)) * 50,
-    y: 50 - (position.x / (RINKS.standard.width / 2)) * 50,
-  }
-}
+const goalieControls = () => ({ lateral: goalieLateral.value, depth: goalieDepth.value })
+const goalieRinkPosition = (team) => getGoalieRinkPosition(team, goalieControls())
+const toPaddedRinkCoordinates = (point) => getPaddedRinkCoordinates(point, goalieControls())
 
 function gamePointToMapPoint(point) {
   if (point.position) return rinkWorldToMapPoint(point.position)
@@ -213,13 +129,6 @@ function gamePointToMapPoint(point) {
   return {
     x: 50 - point.x * 45,
     y: 50 - point.y * 45,
-  }
-}
-
-function mapPointToRinkSvgPoint(point) {
-  return {
-    x: point.x / 100 * rinkMapSvg.width,
-    y: point.y / 100 * rinkMapSvg.height,
   }
 }
 
@@ -232,89 +141,30 @@ function cameraMapTransformForPlayer(player) {
   return `translate(${point.x} ${point.y}) rotate(${cameraMapBaseDegrees.value - cameraYawDegrees.value})`
 }
 
-function mapGoalCreasePath(goalLine, direction) {
-  const center = rinkWorldToMapPoint(goalLine)
-  const width = (creaseWidth / RINKS.standard.height) * 90
-  const radiusX = (creaseDepth / RINKS.standard.height) * 90
-  const radiusY = (creaseDepth / RINKS.standard.width) * 90
-  const realSideDepth = Math.sqrt(creaseDepth ** 2 - (creaseWidth / 2) ** 2)
-  const sideDepth = (realSideDepth / RINKS.standard.width) * 90
-  const endY = direction > 0 ? center.y - sideDepth : center.y + sideDepth
-  const sweep = direction > 0 ? 0 : 1
-  return `M ${center.x - width / 2} ${center.y} L ${center.x - width / 2} ${endY} A ${radiusX} ${radiusY} 0 0 ${sweep} ${center.x + width / 2} ${endY} L ${center.x + width / 2} ${center.y} Z`
-}
-
-function rinkSvgGoalCreasePath(goalLine, direction) {
-  const center = mapPointToRinkSvgPoint(rinkWorldToFullMapPoint(goalLine))
-  const width = (creaseWidth / RINKS.standard.height) * rinkMapSvg.width
-  const radiusX = (creaseDepth / RINKS.standard.height) * rinkMapSvg.width
-  const radiusY = (creaseDepth / RINKS.standard.width) * rinkMapSvg.height
-  const realSideDepth = Math.sqrt(creaseDepth ** 2 - (creaseWidth / 2) ** 2)
-  const sideDepth = (realSideDepth / RINKS.standard.width) * rinkMapSvg.height
-  const endY = direction > 0 ? center.y - sideDepth : center.y + sideDepth
-  const sweep = direction > 0 ? 0 : 1
-  return `M ${center.x - width / 2} ${center.y} L ${center.x - width / 2} ${endY} A ${radiusX} ${radiusY} 0 0 ${sweep} ${center.x + width / 2} ${endY} L ${center.x + width / 2} ${center.y} Z`
-}
-
-function mapCircleRadius(radius) {
-  return {
-    x: (radius / RINKS.standard.height) * 100,
-    y: (radius / RINKS.standard.width) * 100,
-  }
-}
-
-function rinkSvgCenterCircle() {
-  const radius = mapCircleRadius(faceoffCircleRadius)
-  return {
-    center: mapPointToRinkSvgPoint(rinkWorldToFullMapPoint({ x: 0, z: 0 })),
-    radius: {
-      x: radius.x / 100 * rinkMapSvg.width,
-      y: radius.y / 100 * rinkMapSvg.height,
-    },
-  }
-}
-
-function rinkSvgCircle(center, radius) {
-  const mapRadius = mapCircleRadius(radius)
-  return {
-    center: mapPointToRinkSvgPoint(rinkWorldToFullMapPoint(center)),
-    radius: {
-      x: mapRadius.x / 100 * rinkMapSvg.width,
-      y: mapRadius.y / 100 * rinkMapSvg.height,
-    },
-  }
-}
-
-function rinkSvgPoint(position) {
-  return mapPointToRinkSvgPoint(rinkWorldToFullMapPoint(position))
-}
-
-function rinkSvgPoints(points) {
-  return points.map((point) => `${point.x},${point.y}`).join(' ')
-}
-
-function analyticsTeamClass(team) {
-  return `simulation-map__analytics-area simulation-map__analytics-area--${team}`
-}
-
-function analyticsPlayerAreaClass(team) {
-  return `simulation-map__analytics-player-area simulation-map__analytics-player-area--${team}`
-}
-
-function heatMapCellStyle(cell) {
-  const hue = 8 + cell.score * 138
-  const alpha = 0.18 + cell.score * 0.34
-  return {
-    fill: `hsla(${hue}, 88%, 48%, ${alpha})`,
-  }
-}
-
-function passingLaneClass(status) {
-  return `simulation-map__passing-lane simulation-map__passing-lane--${status}`
-}
-
-function goalieCoverageClass(status) {
-  return `simulation-map__goalie-coverage simulation-map__goalie-coverage--${status}`
+function syncSimulationMapState() {
+  const game = currentGame.value
+  simulation.setMapState({
+    heatMap: analyticsHeatMap.value,
+    passingLanes: analyticsPassingLanes.value,
+    goalieCoverage: analyticsGoalieCoverage.value,
+    playerAreas: analyticsPlayerAreas.value,
+    teamAreas: analyticsTeamAreas.value,
+    cameraMapBaseDegrees: cameraMapBaseDegrees.value,
+    cameraYawDegrees: cameraYawDegrees.value,
+    solutionPlayerId: solutionPlayerId(),
+    playerMarkers: (game?.players ?? []).map((player) => ({
+      id: player.id,
+      team: player.id.startsWith('home_') ? 'home' : 'guest',
+      hasPuck: game?.possession_player_id === player.id,
+      isCamera: game?.camera_player_id === player.id,
+      point: gamePointToRinkSvgPoint(player),
+      cameraTransform: cameraMapTransformForPlayer(player),
+    })),
+    slotMarkers: (game?.slots ?? []).map((slot) => ({
+      id: slot.id,
+      point: gamePointToRinkSvgPoint(slot),
+    })),
+  })
 }
 
 function closeupGoalieTransform(team) {
@@ -322,42 +172,6 @@ function closeupGoalieTransform(team) {
   const map = rinkWorldToCreaseCloseupPoint({ x: position.x, z: position.y }, team)
   const rotation = team === 'home' ? goalieRotation.value : 180 - goalieRotation.value
   return `translate(${map.x} ${map.y}) rotate(${rotation})`
-}
-
-function goalieWorldYaw(team) {
-  const base = team === 'home' ? Math.PI / 2 : -Math.PI / 2
-  return base - THREE.MathUtils.degToRad(goalieRotation.value)
-}
-
-function closeupGoalCreasePath() {
-  const centerX = 50
-  const goalLineY = 9
-  const width = 48
-  const radius = width * (creaseDepth / creaseWidth)
-  const halfWidth = width / 2
-  const sideDepth = Math.sqrt(radius ** 2 - halfWidth ** 2)
-  const endY = goalLineY + sideDepth
-  return `M ${centerX - halfWidth} ${goalLineY} V ${endY} A ${radius} ${radius} 0 0 0 ${centerX + halfWidth} ${endY} V ${goalLineY} Z`
-}
-
-function rinkWorldToCreaseCloseupPoint(position, team = 'home') {
-  const goalLine = team === 'home' ? homeGoalLine : guestGoalLine
-  const direction = team === 'home' ? 1 : -1
-  const cageY = 9
-  const lateralScale = 36 / creaseWidth
-  const depthScale = 62 / (rinkPlacementPadding + creaseDepth)
-  const lateral = position.z
-  const depth = (position.x - goalLine.x) * direction
-  return {
-    x: 50 + lateral * lateralScale,
-    y: cageY + depth * depthScale,
-  }
-}
-
-function cameraPlayerMapPoint() {
-  const id = currentGame.value?.camera_player_id
-  const position = id ? playerPositions.get(id) : null
-  return position ? rinkWorldToMapPoint(position) : null
 }
 
 function creaseCloseupShotSegments() {
@@ -368,121 +182,14 @@ function creaseCloseupShotSegments() {
   const team = id.startsWith('home_') ? 'guest' : 'home'
   const start = rinkWorldToCreaseCloseupPoint(position, team)
   const goalLine = team === 'home' ? homeGoalLine : guestGoalLine
-  const goalWidth = 1.83
   return [
     rinkWorldToCreaseCloseupPoint({ x: goalLine.x, z: -goalWidth / 2 }, team),
     rinkWorldToCreaseCloseupPoint({ x: goalLine.x, z: goalWidth / 2 }, team),
   ].map((end) => ({ start, end }))
 }
 
-function shotLineMapSegments() {
-  if (!showShotLines.value || !currentGame.value) return []
-  const start = cameraPlayerMapPoint()
-  if (!start) return []
-  const goal = opponentGoalForCameraPlayer()
-  const goalWidth = 1.83
-  return [
-    rinkWorldToMapPoint({ x: goal.x, z: goal.z - goalWidth / 2 }),
-    rinkWorldToMapPoint({ x: goal.x, z: goal.z + goalWidth / 2 }),
-  ].map((end) => ({ start, end }))
-}
-
-function clampRinkPosition(x, z) {
-  return {
-    x: clamp(x, -RINKS.standard.width / 2 + rinkPlacementPadding, RINKS.standard.width / 2 - rinkPlacementPadding),
-    z: clamp(z, -RINKS.standard.height / 2 + rinkPlacementPadding, RINKS.standard.height / 2 - rinkPlacementPadding),
-  }
-}
-
-function createFloorRect(center, size, material, y = 0.025) {
-  const geometry = new THREE.PlaneGeometry(size.width, size.height)
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.rotation.x = -Math.PI / 2
-  mesh.position.set(center.x, y, center.z)
-  mesh.renderOrder = 5
-  return mesh
-}
-
-function createFloorCircle(center, radius, material, y = 0.026, segments = 64) {
-  const geometry = new THREE.CircleGeometry(radius, segments)
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.rotation.x = -Math.PI / 2
-  mesh.position.set(center.x, y, center.z)
-  mesh.renderOrder = 6
-  return mesh
-}
-
-function createFloorRing(center, radius, thickness, material, y = 0.027, segments = 96) {
-  const geometry = new THREE.RingGeometry(radius - thickness / 2, radius + thickness / 2, segments)
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.rotation.x = -Math.PI / 2
-  mesh.position.set(center.x, y, center.z)
-  mesh.renderOrder = 6
-  return mesh
-}
-
-function createGoalCrease(goalLine, direction, fillMaterial, outlineMaterial) {
-  const feetToWorld = RINKS.standard.width / 200
-  const width = 8 * feetToWorld
-  const radius = 6 * feetToWorld
-  const outline = 2 / 12 * feetToWorld
-  const sideDepth = Math.sqrt(radius ** 2 - (width / 2) ** 2)
-
-  const createShape = (padding = 0) => {
-    const halfWidth = width / 2 + padding
-    const arcRadius = radius + padding
-    const arcStart = Math.asin(halfWidth / arcRadius)
-    const startAngle = direction > 0 ? -arcStart : Math.PI + arcStart
-    const endAngle = direction > 0 ? arcStart : Math.PI - arcStart
-    const shape = new THREE.Shape()
-    shape.moveTo(0, -halfWidth)
-    shape.lineTo(direction * sideDepth, -halfWidth)
-    shape.absarc(0, 0, arcRadius, startAngle, endAngle, direction < 0)
-    shape.lineTo(0, halfWidth)
-    shape.lineTo(0, -halfWidth)
-    return shape
-  }
-
-  const group = new THREE.Group()
-  const outlineMesh = new THREE.Mesh(new THREE.ShapeGeometry(createShape(outline)), outlineMaterial)
-  const fillMesh = new THREE.Mesh(new THREE.ShapeGeometry(createShape()), fillMaterial)
-  for (const [index, mesh] of [outlineMesh, fillMesh].entries()) {
-    mesh.rotation.x = -Math.PI / 2
-    mesh.position.set(goalLine.x, 0.031 + index * 0.001, goalLine.z)
-    mesh.renderOrder = 7 + index
-    group.add(mesh)
-  }
-  return group
-}
-
-async function loadRandomGame() {
-  try {
-    const games = await fetchGameList()
-    if (!games.length) return defaultGame()
-    const selected = games[Math.floor(Math.random() * games.length)]
-    const file = typeof selected === 'string' ? selected : selected.file
-    return loadGameByFile(file)
-  } catch {
-    return defaultGame()
-  }
-}
-
-async function fetchGameList() {
-  const response = await fetch(gamesEndpoint)
-  if (!response.ok) return []
-  const games = (await response.json()).games ?? []
-  gameList.value = games.map((game) => (typeof game === 'string' ? { file: game, name: game } : game))
-  return gameList.value
-}
-
-async function loadGameByFile(file) {
-  const gameResponse = await fetch(`${gamesEndpoint}?file=${encodeURIComponent(file)}`)
-  const game = gameResponse.ok ? { ...defaultGame(), ...(await gameResponse.json()) } : defaultGame()
-  return { ...game, file }
-}
-
 async function openGamePicker() {
-  gameList.value = await fetchGameList()
+  gameList.value = await simulation.fetchGameList()
   showGamePicker.value = true
 }
 
@@ -490,34 +197,13 @@ function closeGamePicker() {
   showGamePicker.value = false
 }
 
-function disposeObject(object) {
-  object.traverse?.((child) => {
-    child.geometry?.dispose?.()
-    child.material?.map?.dispose?.()
-    child.material?.dispose?.()
-  })
-}
-
-function clearGroup(group) {
-  if (!group) return
-  for (const child of [...group.children]) {
-    group.remove(child)
-    disposeObject(child)
-  }
-}
-
 function applySceneTheme() {
-  if (!scene) return
-  const theme = cartoonMode.value ? sceneTheme.cartoon : sceneTheme.real
-  scene.background = new THREE.Color(theme.background)
-  scene.fog = new THREE.Fog(theme.fog, cartoonMode.value ? 34 : 28, cartoonMode.value ? 92 : 82)
-  rinkSurfaceMaterial.color.setHex(theme.surface)
-  rinkSurfaceMaterial.roughness = theme.roughness
-  rinkSurfaceMaterial.metalness = cartoonMode.value ? 0 : 0.02
-  rinkWallMaterial.color.setHex(theme.wall)
-  rinkWallMaterial.roughness = cartoonMode.value ? 0.55 : 0.72
-  rinkSurfaceMaterial.needsUpdate = true
-  rinkWallMaterial.needsUpdate = true
+  applyThreeSceneTheme({
+    scene,
+    cartoonMode: cartoonMode.value,
+    surfaceMaterial: rinkSurfaceMaterial,
+    wallMaterial: rinkWallMaterial,
+  })
 }
 
 function applyCameraProfile(profile) {
@@ -559,6 +245,7 @@ function createGrid() {
 
 function toggleGrid() {
   showGrid.value = !showGrid.value
+  simulation.setGridVisible(showGrid.value)
   createGrid()
   gridGroup.visible = showGrid.value
 }
@@ -574,6 +261,7 @@ function setFreeCamera(enabled) {
     }
   }
   freeCamera.value = enabled
+  simulation.setFreeCamera(enabled)
   pressedKeys.clear()
   if (enabled) {
     applyCameraProfile(cameraProfiles.orbit)
@@ -640,27 +328,6 @@ function isVisibleFromCamera(position) {
   return projected.x >= -1 && projected.x <= 1 && projected.y >= -1 && projected.y <= 1 && projected.z >= -1 && projected.z <= 1
 }
 
-function createDistanceLabel(text) {
-  const canvas = document.createElement('canvas')
-  canvas.width = 160
-  canvas.height = 56
-  const context = canvas.getContext('2d')
-  context.fillStyle = 'rgba(20, 20, 20, 0.82)'
-  context.fillRect(0, 0, canvas.width, canvas.height)
-  context.fillStyle = '#ffffff'
-  context.font = '700 28px Inter, Arial, sans-serif'
-  context.textAlign = 'center'
-  context.textBaseline = 'middle'
-  context.fillText(text, canvas.width / 2, canvas.height / 2)
-  const texture = new THREE.CanvasTexture(canvas)
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false })
-  disposeLater(texture, material)
-  const sprite = new THREE.Sprite(material)
-  sprite.scale.set(0.72, 0.25, 1)
-  sprite.renderOrder = 50
-  return sprite
-}
-
 function ensureShotLineGroup() {
   if (shotLineGroup) return shotLineGroup
   shotLineGroup = new THREE.Group()
@@ -679,125 +346,19 @@ function clearAnalyticsGroup() {
   clearGroup(analyticsGroup)
 }
 
-function heatMapColor(score) {
-  return new THREE.Color().setHSL((8 + score * 138) / 360, 0.88, 0.48)
-}
-
-function passingLaneColor(status) {
-  const colors = {
-    clear: 0x31e65d,
-    partial: 0xfeb836,
-    blocked: 0xd91f32,
-  }
-  return colors[status] ?? colors.clear
-}
-
-function goalieCoverageColor(status) {
-  const colors = {
-    aligned: 0x31e65d,
-    close: 0xfeb836,
-    off: 0xd91f32,
-  }
-  return colors[status] ?? colors.close
-}
-
-function addAnalyticsLine(group, start, end, color, opacity, renderOrder = 20) {
-  const geometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(start.x, 0.13, start.z),
-    new THREE.Vector3(end.x, 0.13, end.z),
-  ])
-  const material = new THREE.LineBasicMaterial({
-    color,
-    transparent: true,
-    opacity,
-    depthTest: false,
-  })
-  const line = new THREE.Line(geometry, material)
-  line.renderOrder = renderOrder
-  disposeLater(geometry, material)
-  group.add(line)
-}
-
 function renderAnalyticsOverlays() {
-  const group = ensureAnalyticsGroup()
-  clearGroup(group)
-  const colors = { home: 0x172f8a, guest: 0xd91f32 }
-  for (const cell of analyticsHeatMap.value) {
-    const geometry = new THREE.PlaneGeometry(cell.world.width, cell.world.height)
-    const material = new THREE.MeshBasicMaterial({
-      color: heatMapColor(cell.score),
-      transparent: true,
-      opacity: 0.18 + cell.score * 0.3,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.rotation.x = -Math.PI / 2
-    mesh.position.set(cell.world.x, 0.055, cell.world.z)
-    mesh.renderOrder = 16
-    disposeLater(geometry, material)
-    group.add(mesh)
-  }
-  for (const lane of analyticsPassingLanes.value) {
-    const start = new THREE.Vector3(lane.worldStart.x, 0.12, lane.worldStart.z)
-    const end = new THREE.Vector3(lane.worldEnd.x, 0.12, lane.worldEnd.z)
-    const geometry = new THREE.BufferGeometry().setFromPoints([start, end])
-    const material = new THREE.LineBasicMaterial({
-      color: passingLaneColor(lane.status),
-      transparent: true,
-      opacity: 0.92,
-      depthTest: false,
-    })
-    const line = new THREE.Line(geometry, material)
-    line.renderOrder = 19
-    disposeLater(geometry, material)
-    group.add(line)
-  }
-  for (const cone of analyticsGoalieCoverage.value) {
-    const coneColor = goalieCoverageColor(cone.status)
-    addAnalyticsLine(group, cone.worldApex, cone.worldTarget, coneColor, 0.96, 21)
-    addAnalyticsLine(group, cone.worldApex, cone.worldFacing, 0xffffff, 0.74, 22)
-    for (const post of cone.worldPosts) addAnalyticsLine(group, cone.worldApex, post, 0x6fb6ff, 0.54, 20)
-  }
-  for (const area of analyticsPlayerAreas.value) {
-    const geometry = new THREE.CircleGeometry(playerAreaRadius, 48)
-    const material = new THREE.MeshBasicMaterial({
-      color: colors[area.team] ?? 0x31e65d,
-      transparent: true,
-      opacity: 0.22,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.rotation.x = -Math.PI / 2
-    mesh.position.set(area.world.x, 0.07, area.world.z)
-    mesh.renderOrder = 17
-    disposeLater(geometry, material)
-    group.add(mesh)
-  }
-  for (const area of analyticsTeamAreas.value) {
-    if ((area.worldPoints?.length ?? 0) < 3) continue
-    const shape = new THREE.Shape()
-    area.worldPoints.forEach((point, index) => {
-      if (index === 0) shape.moveTo(point.x, -point.z)
-      else shape.lineTo(point.x, -point.z)
-    })
-    shape.closePath()
-    const geometry = new THREE.ShapeGeometry(shape)
-    const material = new THREE.MeshBasicMaterial({
-      color: colors[area.team] ?? 0x31e65d,
-      transparent: true,
-      opacity: 0.24,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.rotation.x = -Math.PI / 2
-    mesh.position.y = 0.065
-    mesh.renderOrder = 18
-    disposeLater(geometry, material)
-    group.add(mesh)
-  }
+  renderThreeAnalyticsOverlays({
+    group: ensureAnalyticsGroup(),
+    clearGroup,
+    disposeLater,
+    heatMap: analyticsHeatMap.value,
+    passingLanes: analyticsPassingLanes.value,
+    goalieCoverage: analyticsGoalieCoverage.value,
+    playerAreas: analyticsPlayerAreas.value,
+    teamAreas: analyticsTeamAreas.value,
+    playerAreaRadius,
+  })
+  syncSimulationMapState()
 }
 
 function opponentGoalForCameraPlayer() {
@@ -818,7 +379,6 @@ function updateShotLines() {
   const start = startPosition.clone()
   start.y = floorLineY
   const goal = opponentGoalForCameraPlayer()
-  const goalWidth = 1.83
   const goalHeight = 1.22
   const corners = [
     new THREE.Vector3(goal.x, goalHeight, goal.z - goalWidth / 2),
@@ -831,7 +391,7 @@ function updateShotLines() {
     const line = new THREE.Line(geometry, material)
     line.renderOrder = 60
     const distance = start.distanceTo(corner)
-    const label = createDistanceLabel(`${distance.toFixed(1)} m`)
+    const label = createDistanceLabelSprite(`${distance.toFixed(1)} m`, disposeLater)
     label.position.copy(start.clone().lerp(corner, 0.5)).add(new THREE.Vector3(0, 0.28, 0))
     group.add(line, label)
   }
@@ -877,7 +437,7 @@ function updateRulers() {
       const geometry = new THREE.BufferGeometry().setFromPoints([start, end])
       const line = new THREE.Line(geometry, material)
       line.renderOrder = 49
-      const label = createDistanceLabel(`${distance.toFixed(1)} m`)
+      const label = createDistanceLabelSprite(`${distance.toFixed(1)} m`, disposeLater)
       label.position.copy(start.clone().lerp(end, 0.5)).add(new THREE.Vector3(0, 0.55, 0))
       group.add(line, label)
     }
@@ -886,29 +446,28 @@ function updateRulers() {
 
 function toggleRuler() {
   showRuler.value = !showRuler.value
+  simulation.setRulerVisible(showRuler.value)
   updateRulers()
 }
 
-function toggleAnalyticsMenu() {
-  showAnalyticsMenu.value = !showAnalyticsMenu.value
-}
-
 function drawAnalyticsTeamsAreas() {
-  analyticsTeamAreas.value = drawTeamsAreas({
+  analyticsTeamAreas.value = analytics.drawTeamsAreas({
     players: currentGame.value?.players ?? [],
     playerPositions,
     toSvgPoint: gamePointToRinkSvgPoint,
     getWorldPoint: visualCenterForPlayer,
   })
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('teamAreas', true)
+  simulation.closeAnalyticsMenu()
 }
 
 function clearAnalyticsTeamsAreas() {
-  analyticsTeamAreas.value = removeTeamsAreas()
+  analyticsTeamAreas.value = analytics.removeTeamsAreas()
   clearAnalyticsGroup()
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('teamAreas', false)
+  simulation.closeAnalyticsMenu()
 }
 
 function toggleAnalyticsTeamsAreas() {
@@ -920,21 +479,23 @@ function toggleAnalyticsTeamsAreas() {
 }
 
 function drawAnalyticsPlayerAreas() {
-  analyticsPlayerAreas.value = drawPlayerAreas({
+  analyticsPlayerAreas.value = analytics.drawPlayerAreas({
     players: currentGame.value?.players ?? [],
     playerPositions,
     toSvgPoint: gamePointToRinkSvgPoint,
     getWorldPoint: visualCenterForPlayer,
   })
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('playerAreas', true)
+  simulation.closeAnalyticsMenu()
 }
 
 function clearAnalyticsPlayerAreas() {
   analyticsPlayerAreas.value = []
   clearAnalyticsGroup()
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('playerAreas', false)
+  simulation.closeAnalyticsMenu()
 }
 
 function toggleAnalyticsPlayerAreas() {
@@ -946,7 +507,7 @@ function toggleAnalyticsPlayerAreas() {
 }
 
 function drawAnalyticsHeatMap() {
-  analyticsHeatMap.value = drawOpenSpaceHeatMap({
+  analyticsHeatMap.value = analytics.drawOpenSpaceHeatMap({
     players: currentGame.value?.players ?? [],
     playerPositions,
     rink: RINKS.standard,
@@ -955,14 +516,16 @@ function drawAnalyticsHeatMap() {
     activePlayerId: currentGame.value?.camera_player_id,
   })
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('heatMap', true)
+  simulation.closeAnalyticsMenu()
 }
 
 function clearAnalyticsHeatMap() {
   analyticsHeatMap.value = []
   clearAnalyticsGroup()
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('heatMap', false)
+  simulation.closeAnalyticsMenu()
 }
 
 function toggleAnalyticsHeatMap() {
@@ -974,7 +537,7 @@ function toggleAnalyticsHeatMap() {
 }
 
 function drawAnalyticsPassingLanes() {
-  analyticsPassingLanes.value = drawPassingLanes({
+  analyticsPassingLanes.value = analytics.drawPassingLanes({
     players: currentGame.value?.players ?? [],
     playerPositions,
     toSvgPoint: gamePointToRinkSvgPoint,
@@ -982,14 +545,16 @@ function drawAnalyticsPassingLanes() {
     activePlayerId: currentGame.value?.possession_player_id || currentGame.value?.camera_player_id,
   })
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('passingLanes', true)
+  simulation.closeAnalyticsMenu()
 }
 
 function clearAnalyticsPassingLanes() {
   analyticsPassingLanes.value = []
   clearAnalyticsGroup()
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('passingLanes', false)
+  simulation.closeAnalyticsMenu()
 }
 
 function toggleAnalyticsPassingLanes() {
@@ -1001,7 +566,7 @@ function toggleAnalyticsPassingLanes() {
 }
 
 function drawAnalyticsGoalieCoverage() {
-  analyticsGoalieCoverage.value = drawGoalieCoverageCone({
+  analyticsGoalieCoverage.value = analytics.drawGoalieCoverageCone({
     players: currentGame.value?.players ?? [],
     playerPositions,
     toSvgPoint: gamePointToRinkSvgPoint,
@@ -1009,18 +574,20 @@ function drawAnalyticsGoalieCoverage() {
     activePlayerId: currentGame.value?.possession_player_id || currentGame.value?.camera_player_id,
     homeGoalLine,
     guestGoalLine,
-    goalWidth: 1.83,
+    goalWidth,
     goalieRotationDegrees: goalieRotation.value,
   })
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('goalieCoverage', true)
+  simulation.closeAnalyticsMenu()
 }
 
 function clearAnalyticsGoalieCoverage() {
   analyticsGoalieCoverage.value = []
   clearAnalyticsGroup()
   renderAnalyticsOverlays()
-  showAnalyticsMenu.value = false
+  simulation.setAnalyticsActive('goalieCoverage', false)
+  simulation.closeAnalyticsMenu()
 }
 
 function toggleAnalyticsGoalieCoverage() {
@@ -1038,7 +605,7 @@ function refreshAnalyticsOverlays() {
   const hasPassingLanes = analyticsPassingLanes.value.length
   const hasGoalieCoverage = analyticsGoalieCoverage.value.length
   if (hasTeamAreas) {
-    analyticsTeamAreas.value = drawTeamsAreas({
+    analyticsTeamAreas.value = analytics.drawTeamsAreas({
       players: currentGame.value?.players ?? [],
       playerPositions,
       toSvgPoint: gamePointToRinkSvgPoint,
@@ -1046,7 +613,7 @@ function refreshAnalyticsOverlays() {
     })
   }
   if (hasPlayerAreas) {
-    analyticsPlayerAreas.value = drawPlayerAreas({
+    analyticsPlayerAreas.value = analytics.drawPlayerAreas({
       players: currentGame.value?.players ?? [],
       playerPositions,
       toSvgPoint: gamePointToRinkSvgPoint,
@@ -1054,7 +621,7 @@ function refreshAnalyticsOverlays() {
     })
   }
   if (hasHeatMap) {
-    analyticsHeatMap.value = drawOpenSpaceHeatMap({
+    analyticsHeatMap.value = analytics.drawOpenSpaceHeatMap({
       players: currentGame.value?.players ?? [],
       playerPositions,
       rink: RINKS.standard,
@@ -1064,7 +631,7 @@ function refreshAnalyticsOverlays() {
     })
   }
   if (hasPassingLanes) {
-    analyticsPassingLanes.value = drawPassingLanes({
+    analyticsPassingLanes.value = analytics.drawPassingLanes({
       players: currentGame.value?.players ?? [],
       playerPositions,
       toSvgPoint: gamePointToRinkSvgPoint,
@@ -1073,7 +640,7 @@ function refreshAnalyticsOverlays() {
     })
   }
   if (hasGoalieCoverage) {
-    analyticsGoalieCoverage.value = drawGoalieCoverageCone({
+    analyticsGoalieCoverage.value = analytics.drawGoalieCoverageCone({
       players: currentGame.value?.players ?? [],
       playerPositions,
       toSvgPoint: gamePointToRinkSvgPoint,
@@ -1081,7 +648,7 @@ function refreshAnalyticsOverlays() {
       activePlayerId: currentGame.value?.possession_player_id || currentGame.value?.camera_player_id,
       homeGoalLine,
       guestGoalLine,
-      goalWidth: 1.83,
+      goalWidth,
       goalieRotationDegrees: goalieRotation.value,
     })
   }
@@ -1113,6 +680,7 @@ function rebuildCurrentGameVisuals() {
 
 function toggleCartoonMode() {
   cartoonMode.value = !cartoonMode.value
+  simulation.setCartoonMode(cartoonMode.value)
   applySceneTheme()
   rebuildCurrentGameVisuals()
 }
@@ -1195,8 +763,8 @@ function createRinkMarkings() {
     createFloorRect(guestBlueLine, { width: 0.2, height: RINKS.standard.height }, blueMaterial),
     createFloorRect(homeGoalLine, { width: 0.12, height: RINKS.standard.height }, redMaterial),
     createFloorRect(guestGoalLine, { width: 0.12, height: RINKS.standard.height }, redMaterial),
-    createGoalCrease(homeGoalLine, 1, creaseMaterial, redMaterial),
-    createGoalCrease(guestGoalLine, -1, creaseMaterial, redMaterial),
+    createGoalCrease({ goalLine: homeGoalLine, direction: 1, fillMaterial: creaseMaterial, outlineMaterial: redMaterial, feetToWorld: RINKS.standard.width / 200 }),
+    createGoalCrease({ goalLine: guestGoalLine, direction: -1, fillMaterial: creaseMaterial, outlineMaterial: redMaterial, feetToWorld: RINKS.standard.width / 200 }),
   )
   for (const faceoffCenter of endZoneFaceoffCenters) {
     markings.add(createFloorRing(faceoffCenter, faceoffCircleRadius, 0.08, redMaterial))
@@ -1243,7 +811,7 @@ function addPlayers(scene, game) {
     const team = player.id.startsWith('home_') ? 'home' : 'guest'
     const position = toPaddedRinkCoordinates(player)
     playerPositions.set(player.id, { team, x: position.x, z: position.y })
-    const texture = cropTexture(textures[team], spriteTileForPlayer(player.id))
+    const texture = cropSpriteTexture(textures[team], spriteSheet, spriteTileForPlayer(player.id))
     const isGoalie = player.id.endsWith('_goalie')
     const material = isGoalie
       ? new THREE.MeshBasicMaterial({ map: texture, transparent: true, alphaTest: 0.08, side: THREE.DoubleSide })
@@ -1253,7 +821,7 @@ function addPlayers(scene, game) {
       : new THREE.Sprite(material)
     disposeLater(texture, material)
     if (isGoalie) {
-      sprite.rotation.y = goalieWorldYaw(team)
+      sprite.rotation.y = getGoalieWorldYaw(team, goalieRotation.value)
       sprite.userData.team = team
       disposeLater(sprite.geometry)
     }
@@ -1405,6 +973,7 @@ function updateCameraLook() {
   camera.lookAt(camera.position.clone().add(relativeTarget))
   cameraYawDegrees.value = THREE.MathUtils.radToDeg(cameraYaw)
   updateCameraDirectionMarker()
+  syncSimulationMapState()
 }
 
 function updateCameraDirectionMarker() {
@@ -1419,7 +988,7 @@ function updatePlayerObjects(playerId, position) {
     child.position.x = position.x
     child.position.z = position.z
     if (child.userData.playerVisual && playerId.endsWith('_goalie')) {
-      child.rotation.y = goalieWorldYaw(child.userData.team)
+      child.rotation.y = getGoalieWorldYaw(child.userData.team, goalieRotation.value)
     }
     if (child.userData.resultMarker) {
       child.position.y = playerSpriteSize + 0.8
@@ -1520,6 +1089,9 @@ function loadGameIntoScene(game) {
   analyticsHeatMap.value = []
   analyticsPassingLanes.value = []
   analyticsGoalieCoverage.value = []
+  for (const key of ['passingLanes', 'goalieCoverage', 'heatMap', 'teamAreas', 'playerAreas']) {
+    simulation.setAnalyticsActive(key, false)
+  }
   clearAnalyticsGroup()
   cameraBaseYaw = 0
   cameraYaw = 0
@@ -1527,6 +1099,7 @@ function loadGameIntoScene(game) {
   cameraYawDegrees.value = 0
   currentGame.value = game
   currentFile.value = game.file ?? ''
+  simulation.load(game)
   addPlayers(scene, game)
   addSlots(game)
   addPossessionMarker(game)
@@ -1534,15 +1107,16 @@ function loadGameIntoScene(game) {
   if (!freeCamera.value) positionCamera(game)
   updateRulers()
   updateShotLines()
+  syncSimulationMapState()
   decisionStartedAt.value = performance.now()
 }
 
 async function loadNextGame() {
-  loadGameIntoScene(await loadRandomGame())
+  loadGameIntoScene(await simulation.loadRandomGame())
 }
 
 async function selectGame(file) {
-  loadGameIntoScene(await loadGameByFile(file))
+  loadGameIntoScene(await simulation.loadGameByFile(file))
   showGamePicker.value = false
 }
 
@@ -1556,6 +1130,7 @@ function chooseOption(optionId) {
     success: optionId === bestOption,
   }
   if (currentGame.value.players?.some((player) => player.id === bestOption)) addResultPlayerMarker(bestOption)
+  syncSimulationMapState()
 }
 
 function handleKeydown(event) {
@@ -1692,107 +1267,43 @@ onBeforeUnmount(() => {
         <span>{{ currentFile || 'default' }}</span>
         <span>{{ elapsedSeconds }}s</span>
       </div>
-      <div class="simulation-hud__controls" @pointerdown.capture.stop="beginHudInteraction" @pointermove.capture.stop="stopHudEvent" @pointerup.capture.stop="endHudInteraction" @pointercancel.capture.stop="endHudInteraction" @mousedown.capture.stop="beginHudInteraction" @mousemove.capture.stop="stopHudEvent" @mouseup.capture.stop="endHudInteraction" @click.stop @wheel.stop>
-        <button type="button" :class="{ 'is-active': showTopView }" @click.stop="showTopView = !showTopView">2D</button>
-        <button type="button" :class="{ 'is-active': showGoalOverlay }" @click.stop="showGoalOverlay = !showGoalOverlay">Goal</button>
-        <button type="button" :class="{ 'is-active': showGrid }" @click.stop="toggleGrid">Grid</button>
-        <button type="button" :class="{ 'is-active': freeCamera }" @click.stop="toggleFreeCamera">Orbit</button>
-        <button type="button" :class="{ 'is-active': showRuler }" @click.stop="toggleRuler">Ruler</button>
-        <div class="simulation-hud__analytics">
-          <button type="button" :class="{ 'is-active': showAnalyticsMenu || analyticsTeamAreas.length || analyticsPlayerAreas.length || analyticsHeatMap.length || analyticsPassingLanes.length || analyticsGoalieCoverage.length }" aria-label="Analytics" @click.stop="toggleAnalyticsMenu">...</button>
-          <div v-if="showAnalyticsMenu" class="simulation-hud__analytics-menu">
-            <button type="button" :class="{ 'is-active': analyticsPassingLanes.length }" @click.stop="toggleAnalyticsPassingLanes">Passing lanes</button>
-            <button type="button" :class="{ 'is-active': analyticsGoalieCoverage.length }" @click.stop="toggleAnalyticsGoalieCoverage">Goalie cone</button>
-            <button type="button" :class="{ 'is-active': analyticsHeatMap.length }" @click.stop="toggleAnalyticsHeatMap">Open space</button>
-            <button type="button" :class="{ 'is-active': analyticsTeamAreas.length }" @click.stop="toggleAnalyticsTeamsAreas">Team areas</button>
-            <button type="button" :class="{ 'is-active': analyticsPlayerAreas.length }" @click.stop="toggleAnalyticsPlayerAreas">Player areas</button>
-            <button type="button" :class="{ 'is-active': cartoonMode }" @click.stop="toggleCartoonMode">Cartoon mode</button>
-          </div>
-        </div>
-      </div>
-      <div class="simulation-hud__sliders" @pointerenter="enterHudInteraction" @pointerleave="leaveHudInteraction" @focusin="enterHudInteraction" @focusout="leaveHudInteraction" @pointerdown.capture.stop="beginHudInteraction" @pointermove.capture.stop="stopHudEvent" @pointerup.capture.stop="endHudInteraction" @pointercancel.capture.stop="endHudInteraction" @mousedown.capture.stop="beginHudInteraction" @mousemove.capture.stop="stopHudEvent" @mouseup.capture.stop="endHudInteraction" @touchstart.capture.stop="beginHudInteraction" @touchmove.capture.stop="stopHudEvent" @touchend.capture.stop="endHudInteraction" @click.stop @wheel.stop>
-        <label>
-          <span>Goalie side</span>
-          <strong>{{ formatMeters(goalieSideMeters) }}</strong>
-          <input v-model.number="goalieLateral" type="range" min="-1.35" max="1.35" step="0.01" @input="updateGoalieControls($event)" @change.stop>
-        </label>
-        <label>
-          <span>Goalie depth</span>
-          <strong>{{ formatMeters(goalieDepthMeters) }}</strong>
-          <input v-model.number="goalieDepth" type="range" min="0" max="1" step="0.01" @input="updateGoalieControls($event)" @change.stop>
-        </label>
-        <label>
-          <span>Goalie rotation</span>
-          <strong>{{ formatDegrees(goalieRotationDegrees) }}</strong>
-          <input v-model.number="goalieRotation" type="range" min="-60" max="60" step="1" @input="updateGoalieRotation($event)" @change.stop>
-        </label>
-      </div>
+      <HudControls
+        @toggle-grid="toggleGrid"
+        @toggle-free-camera="toggleFreeCamera"
+        @toggle-ruler="toggleRuler"
+        @toggle-passing-lanes="toggleAnalyticsPassingLanes"
+        @toggle-goalie-coverage="toggleAnalyticsGoalieCoverage"
+        @toggle-heat-map="toggleAnalyticsHeatMap"
+        @toggle-team-areas="toggleAnalyticsTeamsAreas"
+        @toggle-player-areas="toggleAnalyticsPlayerAreas"
+        @toggle-cartoon-mode="toggleCartoonMode"
+        @begin-interaction="beginHudInteraction"
+        @end-interaction="endHudInteraction"
+        @stop-event="stopHudEvent"
+      />
+      <GoalieSliders
+        v-model:lateral="goalieLateral"
+        v-model:depth="goalieDepth"
+        v-model:rotation="goalieRotation"
+        :side-label="formatMeters(goalieSideMeters)"
+        :depth-label="formatMeters(goalieDepthMeters)"
+        :rotation-label="formatDegrees(goalieRotationDegrees)"
+        @update-goalie-controls="updateGoalieControls"
+        @update-goalie-rotation="updateGoalieRotation"
+        @begin-interaction="beginHudInteraction"
+        @end-interaction="endHudInteraction"
+        @enter-interaction="enterHudInteraction"
+        @leave-interaction="leaveHudInteraction"
+        @stop-event="stopHudEvent"
+      />
     </section>
-    <div class="simulation-actions">
-      <button type="button" @click.stop="chooseOption('protect')">Protect</button>
-      <button type="button" @click.stop="chooseOption('shot')">Shot</button>
-    </div>
-    <aside v-if="showTopView || showGoalOverlay" class="simulation-map" aria-label="2d rink visualization">
-      <svg v-if="showGoalOverlay" class="simulation-map__overlay" viewBox="0 0 100 100" aria-hidden="true">
-        <line x1="0" y1="9" x2="100" y2="9" class="simulation-map__goal-line" />
-        <path d="M33 0 V9 M67 0 V9" class="simulation-map__goal-cage" />
-        <path :d="closeupGoalCreasePath()" class="simulation-map__crease" />
-        <line v-for="(segment, index) in creaseCloseupShotSegments()" :key="index" :x1="segment.start.x" :y1="segment.start.y" :x2="segment.end.x" :y2="segment.end.y" class="simulation-map__shot-line" />
-        <rect x="-18" y="-3" width="36" height="6" class="simulation-map__goalie-box" :transform="closeupGoalieTransform('home')" />
-      </svg>
-      <svg v-if="showTopView" class="simulation-map__rink" :viewBox="`0 0 ${rinkMapSvg.width} ${rinkMapSvg.height}`" aria-hidden="true">
-          <g data-debug="analytics">
-            <rect v-for="cell in analyticsHeatMap" :key="cell.id" :x="cell.svg.x" :y="cell.svg.y" :width="cell.svg.width" :height="cell.svg.height" class="simulation-map__heat-cell" :style="heatMapCellStyle(cell)" />
-            <line v-for="lane in analyticsPassingLanes" :key="lane.id" :x1="lane.start.x" :y1="lane.start.y" :x2="lane.end.x" :y2="lane.end.y" :class="passingLaneClass(lane.status)" />
-            <g v-for="cone in analyticsGoalieCoverage" :key="cone.id" :class="goalieCoverageClass(cone.status)">
-              <line v-for="(post, index) in cone.posts" :key="`post-${index}`" :x1="cone.apex.x" :y1="cone.apex.y" :x2="post.x" :y2="post.y" class="simulation-map__goalie-coverage-post" />
-              <line :x1="cone.apex.x" :y1="cone.apex.y" :x2="cone.target.x" :y2="cone.target.y" class="simulation-map__goalie-coverage-target" />
-              <line :x1="cone.apex.x" :y1="cone.apex.y" :x2="cone.facing.x" :y2="cone.facing.y" class="simulation-map__goalie-coverage-facing" />
-            </g>
-            <ellipse v-for="area in analyticsPlayerAreas" :key="area.id" :cx="area.center.x" :cy="area.center.y" :rx="rinkSvgCircle({ x: 0, z: 0 }, playerAreaRadius).radius.x" :ry="rinkSvgCircle({ x: 0, z: 0 }, playerAreaRadius).radius.y" :class="analyticsPlayerAreaClass(area.team)" />
-            <polygon v-for="area in analyticsTeamAreas" :key="area.team" :points="rinkSvgPoints(area.points)" :class="analyticsTeamClass(area.team)" />
-          </g>
-          <path :d="rinkSvgGoalCreasePath(homeGoalLine, 1)" class="simulation-map__rink-crease" />
-          <path :d="rinkSvgGoalCreasePath(guestGoalLine, -1)" class="simulation-map__rink-crease" />
-          <line x1="0" :y1="rinkSvgPoint(homeGoalLine).y" :x2="rinkMapSvg.width" :y2="rinkSvgPoint(homeGoalLine).y" class="simulation-map__rink-line" />
-          <line x1="0" :y1="rinkSvgPoint(guestGoalLine).y" :x2="rinkMapSvg.width" :y2="rinkSvgPoint(guestGoalLine).y" class="simulation-map__rink-line" />
-          <line x1="0" :y1="rinkSvgPoint({ x: 0, z: 0 }).y" :x2="rinkMapSvg.width" :y2="rinkSvgPoint({ x: 0, z: 0 }).y" class="simulation-map__rink-line simulation-map__rink-line--center" />
-          <line x1="0" :y1="rinkSvgPoint(homeBlueLine).y" :x2="rinkMapSvg.width" :y2="rinkSvgPoint(homeBlueLine).y" class="simulation-map__rink-blue-line" />
-          <line x1="0" :y1="rinkSvgPoint(guestBlueLine).y" :x2="rinkMapSvg.width" :y2="rinkSvgPoint(guestBlueLine).y" class="simulation-map__rink-blue-line" />
-          <ellipse :cx="rinkSvgCenterCircle().center.x" :cy="rinkSvgCenterCircle().center.y" :rx="rinkSvgCenterCircle().radius.x" :ry="rinkSvgCenterCircle().radius.y" class="simulation-map__rink-circle" />
-          <ellipse v-for="(circle, index) in endZoneFaceoffCenters" :key="`faceoff-${index}`" :cx="rinkSvgCircle(circle, faceoffCircleRadius).center.x" :cy="rinkSvgCircle(circle, faceoffCircleRadius).center.y" :rx="rinkSvgCircle(circle, faceoffCircleRadius).radius.x" :ry="rinkSvgCircle(circle, faceoffCircleRadius).radius.y" class="simulation-map__rink-circle" />
-          <circle :cx="rinkSvgPoint({ x: 0, z: 0 }).x" :cy="rinkSvgPoint({ x: 0, z: 0 }).y" r="2.2" class="simulation-map__rink-dot" />
-          <circle v-for="(circle, index) in endZoneFaceoffCenters" :key="`faceoff-dot-${index}`" :cx="rinkSvgPoint(circle).x" :cy="rinkSvgPoint(circle).y" r="2.2" class="simulation-map__rink-dot" />
-          <template v-for="player in currentGame?.players || []" :key="player.id">
-            <polygon v-if="currentGame?.camera_player_id === player.id" points="0,-3.8 -3.6,3.8 3.6,3.8" class="simulation-map__player-camera" :transform="cameraMapTransformForPlayer(player)" />
-            <circle v-else :cx="gamePointToRinkSvgPoint(player).x" :cy="gamePointToRinkSvgPoint(player).y" r="4" class="simulation-map__player" :class="[`simulation-map__player--${player.id.startsWith('home_') ? 'home' : 'guest'}`, { 'with-ball': currentGame?.possession_player_id === player.id }]" />
-            <circle v-if="solutionPlayerId() === player.id" :cx="gamePointToRinkSvgPoint(player).x" :cy="gamePointToRinkSvgPoint(player).y" r="7" class="simulation-map__solution-player" />
-          </template>
-          <rect v-for="slot in currentGame?.slots || []" :key="slot.id" :x="gamePointToRinkSvgPoint(slot).x - 5" :y="gamePointToRinkSvgPoint(slot).y - 5" width="10" height="10" class="simulation-map__slot" />
-      </svg>
+    <DecisionActions @choose="chooseOption" />
+    <aside v-if="simulation.state.hud.showTopView || simulation.state.hud.showGoalOverlay" class="simulation-map" aria-label="2d rink visualization">
+      <GoalOverlay v-if="simulation.state.hud.showGoalOverlay" :crease-path="closeupGoalCreasePath()" :shot-segments="creaseCloseupShotSegments()" :goalie-transform="closeupGoalieTransform('home')" />
+      <RinkMap v-if="simulation.state.hud.showTopView" />
     </aside>
-    <section v-if="result" class="simulation-modal" role="dialog" aria-modal="true">
-      <div class="simulation-modal__panel" :class="{ 'simulation-modal__panel--success': result.success, 'simulation-modal__panel--error': !result.success }">
-        <strong>{{ result.success ? 'Success' : 'Error' }}</strong>
-        <em v-if="solutionLabel()">Solution: {{ solutionLabel() }}</em>
-        <span>{{ decisionTime }}s</span>
-        <button type="button" @click.stop="loadNextGame">Next</button>
-      </div>
-    </section>
-    <section v-if="showGamePicker" class="simulation-game-picker" role="dialog" aria-modal="true" aria-label="Available games" @click.self="closeGamePicker">
-      <div class="simulation-game-picker__panel">
-        <header>
-          <strong>Games</strong>
-          <button type="button" aria-label="Close" @click.stop="closeGamePicker">Close</button>
-        </header>
-        <div class="simulation-game-picker__body">
-          <button v-for="game in gameList" :key="game.file" type="button" :class="{ 'is-active': currentFile === game.file }" @click.stop="selectGame(game.file)">
-            <strong>{{ game.name || game.file }}</strong>
-            <span>{{ game.file }}</span>
-          </button>
-        </div>
-      </div>
-    </section>
+    <ResultModal :result="result" :solution-label="solutionLabel()" :decision-time="decisionTime" @next="loadNextGame" />
+    <GamePicker :show="showGamePicker" :games="gameList" :current-file="currentFile" @close="closeGamePicker" @select="selectGame" />
   </main>
 </template>
 <style lang="scss" src="./SimulationView.scss"></style>
