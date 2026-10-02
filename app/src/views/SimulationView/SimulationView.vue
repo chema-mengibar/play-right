@@ -14,6 +14,7 @@ import RinkMap from './partials/RinkMap.vue'
 import { renderAnalyticsOverlays as renderThreeAnalyticsOverlays } from './utils/analytics-overlays.js'
 import { assetUrl, rinkUrl } from './utils/assets.js'
 import { closeupGoalCreasePath, goalieWorldYaw as getGoalieWorldYaw, rinkWorldToCreaseCloseupPoint } from './utils/goal-overlay-geometry.js'
+import { useGoalieRinkControls } from './utils/goalie-rink-controls.js'
 import { applySceneTheme as applyThreeSceneTheme, createRinkMaterials } from './utils/scene-theme.js'
 import {
   mapPointToRinkSvgPoint,
@@ -28,7 +29,6 @@ import {
   faceoffDotRadius,
   formatDegrees,
   formatMeters,
-  goalieRinkPosition as getGoalieRinkPosition,
   goalWidth,
   guestBlueLine,
   guestGoalLine,
@@ -40,7 +40,6 @@ import {
   rinkPlacementPadding,
   spriteSheet,
   spriteTileForPlayer,
-  toPaddedRinkCoordinates as getPaddedRinkCoordinates,
 } from './utils/rink-geometry.js'
 import {
   clearGroup,
@@ -118,9 +117,10 @@ const disposeLater = (...items) => {
   disposables.push(...items.filter(Boolean))
 }
 
-const goalieControls = () => ({ lateral: goalieLateral.value, depth: goalieDepth.value })
-const goalieRinkPosition = (team) => getGoalieRinkPosition(team, goalieControls())
-const toPaddedRinkCoordinates = (point) => getPaddedRinkCoordinates(point, goalieControls())
+const { goalieRinkPosition, toPaddedRinkCoordinates } = useGoalieRinkControls({
+  lateral: goalieLateral,
+  depth: goalieDepth,
+})
 
 function gamePointToMapPoint(point) {
   if (point.position) return rinkWorldToMapPoint(point.position)
